@@ -538,53 +538,24 @@
         return;
       }
 
-      const renderedBlocks = [];
-      row.blocks.forEach((block, blockIndex) => {
-        const text = String(block.text ?? "").replace(/[\r\n]/g, "");
-        if (text === "") {
-          return;
-        }
-        try {
-          const rendered = window.figlet.textSync(text, {
-            font,
-            horizontalLayout: "default",
-            verticalLayout: "default",
-          });
-          const lines = rendered.split("\n");
-          const width = lines.reduce((max, line) => Math.max(max, line.length), 0);
-          renderedBlocks.push({
-            color: normalizeColor(block.color, TEAL),
-            lines,
-            width,
-          });
-        } catch (error) {
-          result.renderErrorCount += 1;
-          result.errors.push(`Row ${rowIndex + 1}, block ${blockIndex + 1}: ${error instanceof Error ? error.message : String(error)}`);
-        }
+      const rendered = renderBlocksToLines(row.blocks, font, window.figlet);
+      rendered.errors.forEach(({ blockIndex, error }) => {
+        result.renderErrorCount += 1;
+        result.errors.push(`Row ${rowIndex + 1}, block ${blockIndex + 1}: ${error instanceof Error ? error.message : String(error)}`);
       });
 
-      if (!renderedBlocks.length) {
+      if (!rendered.rows.length) {
         result.warnings.push(`Row ${rowIndex + 1}: no blocks rendered, so the row was skipped.`);
         return;
       }
 
-      const height = renderedBlocks.reduce((max, block) => Math.max(max, block.lines.length), 0);
-      for (let lineIndex = 0; lineIndex < height; lineIndex += 1) {
-        const segments = renderedBlocks.map((block, blockIndex) => {
-          const rawLine = block.lines[lineIndex] || "";
-          const text = blockIndex === renderedBlocks.length - 1 ? rightTrim(rawLine) : padRight(rawLine, block.width);
-          return { text, color: block.color };
-        });
-        const nonEmptySegments = segments.filter((segment) => segment.text !== "");
-        if (nonEmptySegments.length === 0) {
-          continue;
-        }
+      rendered.rows.forEach((renderedRow) => {
         result.logo.rows.push({
-          segments: nonEmptySegments.map((segment) => ({ text: segment.text, color: segment.color })),
+          segments: renderedRow.segments.map((segment) => ({ text: segment.text, color: segment.color })),
         });
-        result.lines.push({ segments: nonEmptySegments });
+        result.lines.push(renderedRow);
         result.renderedRowCount += 1;
-      }
+      });
     });
 
     if (result.renderedRowCount >= 20) {
@@ -603,6 +574,59 @@
       "// [\"@skwid138/opencode-tui/tui\", { \"logo\": <paste here> }]",
       JSON.stringify(logo, null, 2),
     ].join("\n");
+  }
+
+  function renderBlocksToLines(blocks, font, figletApi) {
+    const renderedBlocks = [];
+    const errors = [];
+
+    blocks.forEach((block, blockIndex) => {
+      const text = String(block.text ?? "").replace(/[\r\n]/g, "");
+      if (text === "") {
+        return;
+      }
+      try {
+        const rendered = figletApi.textSync(text, {
+          font,
+          horizontalLayout: "default",
+          verticalLayout: "default",
+        });
+        renderedBlocks.push({
+          color: normalizeColor(block.color, TEAL),
+          lines: trimBlankLines(rendered.split("\n")),
+        });
+      } catch (error) {
+        errors.push({ blockIndex, error });
+      }
+    });
+
+    const height = renderedBlocks.reduce((max, block) => Math.max(max, block.lines.length), 0);
+    const rows = [];
+    for (let lineIndex = 0; lineIndex < height; lineIndex += 1) {
+      const segments = renderedBlocks.map((block) => {
+        const rawLine = block.lines[lineIndex] || "";
+        return { text: rightTrim(rawLine), color: block.color };
+      });
+      const nonEmptySegments = segments.filter((segment) => segment.text !== "");
+      if (nonEmptySegments.length === 0) {
+        continue;
+      }
+      rows.push({ segments: nonEmptySegments });
+    }
+
+    return { rows, errors };
+  }
+
+  function trimBlankLines(lines) {
+    let start = 0;
+    let end = lines.length;
+    while (start < end && lines[start].trim() === "") {
+      start += 1;
+    }
+    while (end > start && lines[end - 1].trim() === "") {
+      end -= 1;
+    }
+    return lines.slice(start, end);
   }
 
   function addBlock(rowIndex) {
@@ -767,11 +791,15 @@
     return index % 2 === 0 ? TEAL : PINK;
   }
 
-  function padRight(value, width) {
-    return value + " ".repeat(Math.max(0, width - value.length));
-  }
-
   function rightTrim(value) {
     return value.replace(/\s+$/g, "");
+  }
+
+  if (typeof window !== "undefined" && window.__LOGO_BUILDER_TEST__) {
+    window.__logoBuilderInternals = {
+      renderBlocksToLines,
+      trimBlankLines,
+      rightTrim,
+    };
   }
 })();
