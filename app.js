@@ -239,7 +239,7 @@
     }
 
     const promise = Promise.resolve()
-      .then(() => window.figlet.loadFont(font))
+      .then(() => window.figlet.loadFont(font, () => {}))
       .then(() => {
         ui.loadedFonts.add(font);
         ui.failedFonts.delete(font);
