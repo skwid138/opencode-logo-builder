@@ -55,21 +55,23 @@ test("Figlet renders Standard font text", () => {
   assert.ok(output.split("\n").length >= 6, "expected multi-line figlet output");
 });
 
-test("trailing whitespace is trimmed from all rendered block segments", () => {
+test("non-final block segments are padded to their consistent trimmed width", () => {
   const rendered = renderBlocksToLines(
     [
-      { text: "A", color: "#111111" },
-      { text: "B", color: "#222222" },
+      { text: "Just", color: "#111111" },
+      { text: "Vibes", color: "#222222" },
     ],
     "Standard",
     figlet,
   );
+  const justLines = trimBlankLines(renderText("Just").split("\n")).map(rightTrim);
+  const justTrimmedWidth = justLines.reduce((max, line) => Math.max(max, line.length), 0);
 
   assert.ok(rendered.rows.length > 0, "expected rendered rows");
   rendered.rows.forEach((row) => {
-    row.segments.forEach((segment) => {
-      assert.ok(!/[ \t]+$/.test(segment.text), `segment has trailing whitespace: ${JSON.stringify(segment.text)}`);
-    });
+    assert.strictEqual(row.segments.length, 2, "expected two rendered segments");
+    assert.strictEqual(row.segments[0].text.length, justTrimmedWidth, "non-final segment should use the block's max trimmed width");
+    assert.ok(!/[ \t]+$/.test(row.segments[1].text), `final segment has trailing whitespace: ${JSON.stringify(row.segments[1].text)}`);
   });
 });
 
@@ -88,7 +90,7 @@ test("blank top and bottom figlet lines are trimmed", () => {
   );
 });
 
-test("multiple blocks concatenate without artificial padding gaps", () => {
+test("multiple blocks concatenate with aligned non-final block width", () => {
   const rendered = renderBlocksToLines(
     [
       { text: "A", color: "#111111" },
@@ -98,14 +100,16 @@ test("multiple blocks concatenate without artificial padding gaps", () => {
     figlet,
   );
   const aLines = trimBlankLines(renderText("A").split("\n")).map(rightTrim);
+  const aTrimmedWidth = aLines.reduce((max, line) => Math.max(max, line.length), 0);
   const bLines = trimBlankLines(renderText("B").split("\n")).map(rightTrim);
 
   assert.strictEqual(rendered.rows.length, Math.max(aLines.length, bLines.length));
   rendered.rows.forEach((row, lineIndex) => {
     assert.strictEqual(row.segments.length, 2, `expected two segments on line ${lineIndex}`);
-    assert.strictEqual(row.segments[0].text, aLines[lineIndex]);
+    assert.strictEqual(row.segments[0].text, aLines[lineIndex].padEnd(aTrimmedWidth, " "));
+    assert.strictEqual(row.segments[0].text.length, aTrimmedWidth);
     assert.strictEqual(row.segments[1].text, bLines[lineIndex]);
-    assert.strictEqual(row.segments.map((segment) => segment.text).join(""), `${aLines[lineIndex]}${bLines[lineIndex]}`);
+    assert.strictEqual(row.segments.map((segment) => segment.text).join(""), `${aLines[lineIndex].padEnd(aTrimmedWidth, " ")}${bLines[lineIndex]}`);
   });
 });
 

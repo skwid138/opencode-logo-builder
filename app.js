@@ -591,9 +591,13 @@
           horizontalLayout: "default",
           verticalLayout: "default",
         });
+        const lines = trimBlankLines(rendered.split("\n"));
+        const trimmedWidth = lines.reduce((max, line) => Math.max(max, rightTrim(line).length), 0);
+
         renderedBlocks.push({
           color: normalizeColor(block.color, TEAL),
-          lines: trimBlankLines(rendered.split("\n")),
+          lines,
+          trimmedWidth,
         });
       } catch (error) {
         errors.push({ blockIndex, error });
@@ -603,15 +607,20 @@
     const height = renderedBlocks.reduce((max, block) => Math.max(max, block.lines.length), 0);
     const rows = [];
     for (let lineIndex = 0; lineIndex < height; lineIndex += 1) {
-      const segments = renderedBlocks.map((block) => {
-        const rawLine = block.lines[lineIndex] || "";
-        return { text: rightTrim(rawLine), color: block.color };
-      });
-      const nonEmptySegments = segments.filter((segment) => segment.text !== "");
-      if (nonEmptySegments.length === 0) {
+      const trimmedLines = renderedBlocks.map((block) => rightTrim(block.lines[lineIndex] || ""));
+      const finalSegmentIndex = findLastIndex(trimmedLines, (line) => line !== "");
+      if (finalSegmentIndex === -1) {
         continue;
       }
-      rows.push({ segments: nonEmptySegments });
+
+      const segments = renderedBlocks.slice(0, finalSegmentIndex + 1).map((block, blockIndex) => {
+        const rawLine = trimmedLines[blockIndex];
+        const text = blockIndex === finalSegmentIndex
+          ? rawLine
+          : padRight(rawLine, block.trimmedWidth);
+        return { text, color: block.color };
+      });
+      rows.push({ segments });
     }
 
     return { rows, errors };
@@ -793,6 +802,22 @@
 
   function rightTrim(value) {
     return value.replace(/\s+$/g, "");
+  }
+
+  function padRight(value, width) {
+    if (value.length >= width) {
+      return value;
+    }
+    return `${value}${" ".repeat(width - value.length)}`;
+  }
+
+  function findLastIndex(values, predicate) {
+    for (let index = values.length - 1; index >= 0; index -= 1) {
+      if (predicate(values[index], index, values)) {
+        return index;
+      }
+    }
+    return -1;
   }
 
   if (typeof window !== "undefined" && window.__LOGO_BUILDER_TEST__) {
