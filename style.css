@@ -423,14 +423,9 @@ input[type="color"] {
 
 .builder-segment {
   display: inline-block;
-  margin-right: 1.25ch;
   padding-inline: 0.15ch;
   border-radius: 0.25rem;
   box-shadow: inset 0 -1px 0 currentColor;
-}
-
-.builder-segment:last-child {
-  margin-right: 0;
 }
 
 .export-output {

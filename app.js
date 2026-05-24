@@ -498,7 +498,7 @@
       line.segments.forEach((segment) => {
         const span = document.createElement("span");
         span.style.color = segment.color;
-        if (builderMode) {
+        if (builderMode && segment.text.trim() !== "") {
           span.className = "builder-segment";
         }
         span.textContent = segment.text;
