@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Build colored FIGlet logos for the @skwid138/opencode-tui OpenCode plugin."
+    />
+    <title>OpenCode Logo Builder</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="https://unpkg.com/figlet@1.8.0/lib/figlet.js"></script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="hero-copy">
+        <p class="eyebrow">OpenCode TUI</p>
+        <h1>Logo Builder</h1>
+        <p class="lede">
+          Design colored ASCII logos with FIGlet fonts and export the exact
+          <code>logo</code> object expected by
+          <a href="https://github.com/skwid138/opencode-tui" target="_blank" rel="noreferrer">@skwid138/opencode-tui</a>.
+        </p>
+      </div>
+      <div class="header-actions" aria-label="Global actions">
+        <button id="themeToggle" class="icon-button" type="button" aria-label="Switch to light theme">
+          <svg class="icon icon-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2"></path>
+            <path d="M12 20v2"></path>
+            <path d="m4.93 4.93 1.41 1.41"></path>
+            <path d="m17.66 17.66 1.41 1.41"></path>
+            <path d="M2 12h2"></path>
+            <path d="M20 12h2"></path>
+            <path d="m6.34 17.66-1.41 1.41"></path>
+            <path d="m19.07 4.93-1.41 1.41"></path>
+          </svg>
+          <svg class="icon icon-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 3a6.7 6.7 0 0 0 8.88 8.88 8.5 8.5 0 1 1-8.88-8.88Z"></path>
+          </svg>
+          <span id="themeToggleText">Light</span>
+        </button>
+        <a class="button secondary" href="https://github.com/skwid138/opencode-tui" target="_blank" rel="noreferrer">Plugin repo</a>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <section class="panel builder-panel" aria-labelledby="builderTitle">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Editor</p>
+            <h2 id="builderTitle">Rows and blocks</h2>
+          </div>
+          <div class="toolbar">
+            <button id="addRowButton" class="button" type="button">Add row</button>
+            <button id="resetButton" class="button danger" type="button">Reset</button>
+          </div>
+        </div>
+        <p class="hint">
+          Each row has one FIGlet font. Blocks render inline with their own colors. Newline characters are stripped before rendering.
+        </p>
+        <div id="fontStatus" class="status-line" role="status" aria-live="polite">Loading fonts…</div>
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <div id="rowsContainer" class="rows-stack"></div>
+      </section>
+
+      <section class="panel preview-panel" aria-labelledby="previewTitle">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2 id="previewTitle">Rendered logo</h2>
+          </div>
+          <label class="inline-field" for="previewBackgroundInput">
+            <span>Preview background</span>
+            <input id="previewBackgroundInput" type="color" value="#0B1020" />
+          </label>
+        </div>
+        <p class="hint">Preview background is only for checking contrast; it is not exported.</p>
+
+        <div class="preview-grid">
+          <article class="preview-card" aria-labelledby="builderPreviewTitle">
+            <h3 id="builderPreviewTitle">Builder view</h3>
+            <p class="hint">Blocks are separated visually here for editing clarity.</p>
+            <div id="builderPreview" class="ascii-preview builder-preview" role="img" aria-label="Builder preview"></div>
+          </article>
+
+          <article class="preview-card" aria-labelledby="finalPreviewTitle">
+            <h3 id="finalPreviewTitle">Final preview</h3>
+            <p class="hint">Seamless output matching the exported plugin config.</p>
+            <div id="finalPreview" class="ascii-preview final-preview" role="img" aria-label="Final preview"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel output-panel" aria-labelledby="outputTitle">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Export</p>
+            <h2 id="outputTitle">Plugin logo object</h2>
+          </div>
+          <button id="copyExportButton" class="button" type="button">Copy export</button>
+        </div>
+        <p class="hint">
+          Font names and preview-only settings are intentionally omitted. Paste the JSON object where the comment indicates.
+        </p>
+        <div id="copyStatus" class="status-line" role="status" aria-live="polite"></div>
+        <pre id="exportOutput" class="export-output" tabindex="0"></pre>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>
+        Static, no-build app. Open <code>index.html</code> locally or deploy from the repository root with GitHub Pages.
+      </p>
+    </footer>
+  </body>
+</html>
