@@ -1,6 +1,8 @@
 (function () {
   "use strict";
 
+  window.FONT_TAGS = window.FONT_TAGS || {};
+
   const STORAGE_KEY = "opencode-logo-builder-state-v1";
   const THEME_STORAGE_KEY = "logo-builder-theme";
   const STORAGE_VERSION = 1;
