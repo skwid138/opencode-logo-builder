@@ -159,7 +159,7 @@
 
   function initializeFiglet() {
     if (!window.figlet || typeof window.figlet.loadFont !== "function") {
-      ui.fatalError = "figlet.js did not load from the CDN. Check your network connection and refresh.";
+      ui.fatalError = "The vendored figlet.js library did not load. Check the local vendor file and refresh.";
       renderApp();
       return;
     }
@@ -543,6 +543,9 @@
         result.renderErrorCount += 1;
         result.errors.push(`Row ${rowIndex + 1}, block ${blockIndex + 1}: ${error instanceof Error ? error.message : String(error)}`);
       });
+      rendered.warnings.forEach((warning) => {
+        result.warnings.push(`Row ${rowIndex + 1}: ${warning}`);
+      });
 
       if (!rendered.rows.length) {
         result.warnings.push(`Row ${rowIndex + 1}: no blocks rendered, so the row was skipped.`);
@@ -577,6 +580,72 @@
   }
 
   function renderBlocksToLines(blocks, font, figletApi) {
+    const ownershipWarnings = [];
+
+    if (typeof window.renderWithOwnership === "function") {
+      try {
+        const rendered = window.renderWithOwnership(blocks, font);
+        return {
+          rows: ownershipLinesToRows(rendered, blocks),
+          errors: Array.isArray(rendered.errors) ? rendered.errors : [],
+          warnings: [rendered.warning, ...(Array.isArray(rendered.warnings) ? rendered.warnings : [])].filter(Boolean),
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ownershipWarnings.push(`Ownership render failed (${message}); using per-block fallback rendering.`);
+      }
+    }
+
+    const fallback = renderBlocksToLinesFallback(blocks, font, figletApi);
+    return {
+      rows: fallback.rows,
+      errors: fallback.errors,
+      warnings: ownershipWarnings,
+    };
+  }
+
+  function ownershipLinesToRows(rendered, blocks) {
+    const rows = [];
+    const lines = Array.isArray(rendered.lines) ? rendered.lines : [];
+    const owners = Array.isArray(rendered.owners) ? rendered.owners : [];
+
+    lines.forEach((line, lineIndex) => {
+      if (line === "") {
+        return;
+      }
+
+      const ownerRow = owners[lineIndex] || [];
+      const segments = [];
+      let segmentOwner = ownerRow[0];
+      let segmentText = "";
+
+      for (let charIndex = 0; charIndex < line.length; charIndex += 1) {
+        const owner = ownerRow[charIndex];
+        if (charIndex > 0 && owner !== segmentOwner) {
+          segments.push({ text: segmentText, color: colorForBlock(blocks, segmentOwner) });
+          segmentText = "";
+          segmentOwner = owner;
+        }
+        segmentText += line[charIndex];
+      }
+
+      if (segmentText !== "") {
+        segments.push({ text: segmentText, color: colorForBlock(blocks, segmentOwner) });
+      }
+      if (segments.length) {
+        rows.push({ segments });
+      }
+    });
+
+    return rows;
+  }
+
+  function colorForBlock(blocks, blockIndex) {
+    const block = blocks[blockIndex];
+    return normalizeColor(block && block.color, TEAL);
+  }
+
+  function renderBlocksToLinesFallback(blocks, font, figletApi) {
     const renderedBlocks = [];
     const errors = [];
 
