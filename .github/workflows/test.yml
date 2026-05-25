@@ -7,10 +7,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download figlet test dependencies
-        run: |
-          mkdir -p vendor
-          curl -fsSL "https://unpkg.com/figlet@1.8.0/lib/figlet.js" -o "vendor/figlet.js"
-          curl -fsSL "https://unpkg.com/figlet@1.8.0/importable-fonts/Standard.js" -o "vendor/Standard.js"
       - name: Run rendering tests
         run: node test.js
