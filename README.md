@@ -22,7 +22,15 @@ Font names, editor metadata, and preview background settings are not exported.
 
 Open `index.html` directly in a browser. There is no framework, bundler, package manager, or build step.
 
-The app uses a vendored copy of `figlet.js` v1.8.0 at `vendor/figlet.js` with a small ownership side-channel patch documented in [`PATCH.md`](PATCH.md). FIGlet font files still load from the public CDN at `unpkg.com`, so non-vendored fonts require network access unless those browser requests are already cached. `vendor/Standard.js` is committed for local tests.
+The app uses a vendored copy of `figlet.js` v1.8.0 at `vendor/figlet.js` with a small ownership side-channel patch documented in [`PATCH.md`](PATCH.md). All 294 raw `.flf` fonts from figlet v1.8.0 are vendored under `vendor/fonts/`, and `font-manifest.js` lists those filenames for the searchable font picker. Runtime font loading fetches `vendor/fonts/<FontName>.flf`, parses it with `figlet.parseFont()`, and falls back to `https://unpkg.com/figlet@1.8.0/fonts/<FontName>.flf` if the local fetch fails.
+
+When opened via `file://`, browsers usually reject relative `fetch()` requests to `vendor/fonts/`; the CDN fallback keeps font loading working as long as the browser can reach `unpkg.com`. Offline `file://` use may only render fonts already cached by the browser. `vendor/Standard.js` is committed for Node tests only; the browser uses the `.flf` files.
+
+To verify that `font-manifest.js` matches the vendored fonts, run:
+
+```sh
+node scripts/verify-font-manifest.js
+```
 
 ## Deployment
 
