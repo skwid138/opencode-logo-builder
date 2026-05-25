@@ -359,6 +359,91 @@ h3 {
   min-width: min(18rem, 100%);
 }
 
+.font-field {
+  min-width: min(18rem, 100%);
+}
+
+.font-combobox {
+  position: relative;
+  min-width: min(18rem, 100%);
+}
+
+.font-combobox-input {
+  width: 100%;
+}
+
+.font-listbox {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  max-height: 18rem;
+  overflow-y: auto;
+  padding: 0.35rem;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.font-listbox[hidden] {
+  display: none;
+}
+
+.font-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 9px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.font-option::after {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.font-option.loaded::after {
+  content: "Loaded";
+}
+
+.font-option.loading::after {
+  content: "Loading";
+}
+
+.font-option.failed::after {
+  content: "Failed";
+  color: var(--danger);
+}
+
+.font-option.unloaded:not(.loaded) {
+  opacity: 0.58;
+}
+
+.font-option.highlighted,
+.font-option:hover {
+  background: color-mix(in srgb, var(--bg-soft) 72%, var(--accent));
+  opacity: 1;
+}
+
+.font-option.empty {
+  cursor: default;
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.font-option.empty::after {
+  content: "";
+}
+
 input[type="color"] {
   width: 3.25rem;
   min-height: 2.35rem;
@@ -449,6 +534,11 @@ input[type="color"] {
   }
 
   .field select {
+    min-width: 100%;
+  }
+
+  .font-field,
+  .font-combobox {
     min-width: 100%;
   }
 }
