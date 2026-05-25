@@ -5,6 +5,7 @@ const vm = require("vm");
 
 const figlet = require("./vendor/figlet");
 const { renderWithOwnership } = require("./figlet-color-map");
+const { compareFontSets, parseFontManifest } = require("./scripts/verify-font-manifest");
 
 function loadImportableFont(fontName) {
   const fontPath = path.join(__dirname, "vendor", `${fontName}.js`);
@@ -249,21 +250,147 @@ test("app render path uses ownership renderer for seamless final rows", () => {
   assert.strictEqual(rendered.warnings.length, 0);
 });
 
-let failed = 0;
-tests.forEach(({ name, fn }) => {
-  try {
-    fn();
-    console.log(`✓ ${name}`);
-  } catch (error) {
-    failed += 1;
-    console.error(`✗ ${name}`);
-    console.error(error && error.stack ? error.stack : error);
-  }
+test("font loading fetches local FLF, checks response.ok, and parses the font", async () => {
+  const parseCalls = [];
+  const internals = loadLogoBuilderInternals({
+    figlet: {
+      parseFont(name, data) {
+        parseCalls.push({ name, data });
+      },
+      textSync() {},
+    },
+    fetch: async (url) => ({
+      ok: true,
+      status: 200,
+      async text() {
+        return `data for ${url}`;
+      },
+    }),
+  });
+
+  await internals.loadFontAsync("Big Chief");
+
+  assert.deepStrictEqual(parseCalls, [{ name: "Big Chief", data: "data for vendor/fonts/Big%20Chief.flf" }]);
 });
 
-if (failed > 0) {
-  console.error(`${failed} test${failed === 1 ? "" : "s"} failed.`);
-  process.exit(1);
-}
+test("font loading falls back to CDN when local response is not ok", async () => {
+  const urls = [];
+  const parseCalls = [];
+  const internals = loadLogoBuilderInternals({
+    figlet: {
+      parseFont(name, data) {
+        parseCalls.push({ name, data });
+      },
+      textSync() {},
+    },
+    fetch: async (url) => {
+      urls.push(url);
+      if (url.startsWith("vendor/fonts/")) {
+        return { ok: false, status: 404, text: async () => "not found" };
+      }
+      return { ok: true, status: 200, text: async () => "cdn flf" };
+    },
+  });
 
-console.log(`${tests.length} tests passed.`);
+  await internals.loadFontAsync("Star Wars");
+
+  assert.deepStrictEqual(urls, [
+    "vendor/fonts/Star%20Wars.flf",
+    "https://unpkg.com/figlet@1.8.0/fonts/Star%20Wars.flf",
+  ]);
+  assert.deepStrictEqual(parseCalls, [{ name: "Star Wars", data: "cdn flf" }]);
+});
+
+test("font loading deletes failed cache entries so later calls retry", async () => {
+  let callCount = 0;
+  const parseCalls = [];
+  const internals = loadLogoBuilderInternals({
+    figlet: {
+      parseFont(name, data) {
+        parseCalls.push({ name, data });
+      },
+      textSync() {},
+    },
+    fetch: async () => {
+      callCount += 1;
+      if (callCount <= 2) {
+        return { ok: false, status: 500, text: async () => "bad" };
+      }
+      return { ok: true, status: 200, text: async () => "retry flf" };
+    },
+  });
+
+  await assert.rejects(() => internals.loadFontAsync("Retry Font"), /Font fetch failed/);
+  await internals.loadFontAsync("Retry Font");
+
+  assert.strictEqual(callCount, 3, "expected local+cdn failure, then a new local retry");
+  assert.deepStrictEqual(parseCalls, [{ name: "Retry Font", data: "retry flf" }]);
+});
+
+test("font loading deduplicates in-flight requests for the same font", async () => {
+  let resolveText;
+  let fetchCount = 0;
+  const parseCalls = [];
+  const textPromise = new Promise((resolve) => {
+    resolveText = resolve;
+  });
+  const internals = loadLogoBuilderInternals({
+    figlet: {
+      parseFont(name, data) {
+        parseCalls.push({ name, data });
+      },
+      textSync() {},
+    },
+    fetch: async () => {
+      fetchCount += 1;
+      return { ok: true, status: 200, text: () => textPromise };
+    },
+  });
+
+  const first = internals.loadFontAsync("Shared Font");
+  const second = internals.loadFontAsync("Shared Font");
+  resolveText("shared flf");
+  await Promise.all([first, second]);
+
+  assert.strictEqual(fetchCount, 1);
+  assert.deepStrictEqual(parseCalls, [{ name: "Shared Font", data: "shared flf" }]);
+});
+
+test("manifest parser and set comparison detect exact drift", () => {
+  assert.deepStrictEqual(parseFontManifest('window.ALL_FONTS = ["A", "B Font"];\n'), ["A", "B Font"]);
+  assert.strictEqual(compareFontSets(["A", "B"], ["A", "B"]).ok, true);
+
+  const drift = compareFontSets(["A", "B"], ["A", "C"]);
+  assert.strictEqual(drift.ok, false);
+  assert.deepStrictEqual(drift.missingFromManifest, ["B"]);
+  assert.deepStrictEqual(drift.missingFromVendor, ["C"]);
+});
+
+test("font dropdown filter matches case-insensitively while preserving order", () => {
+  const internals = loadLogoBuilderInternals({ ALL_FONTS: ["Big", "Big Chief", "Small", "Star Wars"] });
+
+  assert.deepStrictEqual(internals.filterFontOptions("big", ["Big", "Big Chief", "Small", "Star Wars"]), ["Big", "Big Chief"]);
+  assert.deepStrictEqual(internals.filterFontOptions(" wars ", ["Big", "Big Chief", "Small", "Star Wars"]), ["Star Wars"]);
+  assert.deepStrictEqual(internals.filterFontOptions("", ["Big", "Small"]), ["Big", "Small"]);
+});
+
+let failed = 0;
+(async () => {
+  for (const { name, fn } of tests) {
+    try {
+      await fn();
+      console.log(`✓ ${name}`);
+    } catch (error) {
+      failed += 1;
+      console.error(`✗ ${name}`);
+      console.error(error && error.stack ? error.stack : error);
+    }
+  }
+
+  if (failed > 0) {
+    console.error(`${failed} test${failed === 1 ? "" : "s"} failed.`);
+    process.exit(1);
+  }
+
+  console.log(`${tests.length} tests passed.`);
+})();
