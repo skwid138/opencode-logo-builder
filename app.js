@@ -49,6 +49,11 @@
   };
 
   const els = {};
+  let cyclePreviewTimer = null;
+  let cycleSaveTimer = null;
+  const pendingCycleFonts = new Set();
+  const CYCLE_PREVIEW_DEBOUNCE_MS = 150;
+  const CYCLE_SAVE_DEBOUNCE_MS = 500;
 
   document.addEventListener("DOMContentLoaded", () => {
     void init();
@@ -148,6 +153,10 @@
         closeAllFontComboboxes();
       }
     });
+
+    if (typeof window.addEventListener === "function") {
+      window.addEventListener("beforeunload", flushCyclePending);
+    }
   }
 
   async function initializeFiglet() {
@@ -367,17 +376,15 @@
     listbox.setAttribute("role", "listbox");
     listbox.hidden = !comboboxState.open;
 
+    const tagControls = document.createElement("div");
+    tagControls.className = "font-tag-controls";
+
     const openList = () => {
-      comboboxState.open = true;
-      input.setAttribute("aria-expanded", "true");
-      listbox.hidden = false;
-      renderFontOptions(rowIndex, listbox, input);
+      openFontCombobox(rowIndex, listbox, input);
     };
 
     input.addEventListener("focus", () => {
       comboboxState.filter = "";
-      comboboxState.highlightIndex = highlightedIndexForFont(row.font, filterFontOptions(""));
-      openList();
       input.select();
     });
     input.addEventListener("click", (event) => {
@@ -386,12 +393,18 @@
     });
     input.addEventListener("input", (event) => {
       comboboxState.filter = event.target.value;
-      comboboxState.open = true;
-      comboboxState.highlightIndex = 0;
-      renderFontOptions(rowIndex, listbox, input);
+      if (comboboxState.open) {
+        comboboxState.highlightIndex = 0;
+        renderFontOptions(rowIndex, listbox, input);
+      } else {
+        openList();
+      }
     });
     input.addEventListener("keydown", (event) => {
       handleFontComboboxKeydown(event, rowIndex, listbox, input);
+    });
+    input.addEventListener("blur", () => {
+      flushCyclePending();
     });
     combobox.addEventListener("focusout", () => {
       setTimeout(() => {
@@ -401,25 +414,118 @@
       }, 0);
     });
 
+    renderFontTagControls(rowIndex, tagControls, listbox, input);
     renderFontOptions(rowIndex, listbox, input);
-    combobox.append(input, listbox);
+    combobox.append(tagControls, input, listbox);
     field.append(text, combobox);
     return field;
   }
 
   function getFontComboboxState(rowIndex) {
     if (!ui.fontComboboxes.has(rowIndex)) {
-      ui.fontComboboxes.set(rowIndex, { filter: "", open: false, highlightIndex: 0 });
+      ui.fontComboboxes.set(rowIndex, { filter: "", open: false, highlightIndex: 0, activeTags: [], tagPanelOpen: false });
     }
-    return ui.fontComboboxes.get(rowIndex);
+    const comboboxState = ui.fontComboboxes.get(rowIndex);
+    if (!Array.isArray(comboboxState.activeTags)) {
+      comboboxState.activeTags = [];
+    }
+    if (typeof comboboxState.tagPanelOpen !== "boolean") {
+      comboboxState.tagPanelOpen = false;
+    }
+    return comboboxState;
   }
 
   function filterFontOptions(filter, fonts = ui.availableFonts) {
-    const normalizedFilter = String(filter || "").trim().toLowerCase();
-    if (!normalizedFilter) {
-      return fonts.slice();
+    const filtered = filterWithTags(fonts, [], filter);
+    return String(filter || "").trim() ? sortFontResults(filtered, filter) : filtered;
+  }
+
+  function getFilteredFontOptions(comboboxState, fonts = ui.availableFonts) {
+    const activeTags = Array.isArray(comboboxState.activeTags) ? comboboxState.activeTags : [];
+    const searchText = comboboxState.filter;
+    const filtered = filterWithTags(fonts, activeTags, searchText);
+    if (!activeTags.length && !String(searchText || "").trim()) {
+      return filtered;
     }
-    return fonts.filter((font) => font.toLowerCase().includes(normalizedFilter));
+    return sortFontResults(filtered, searchText);
+  }
+
+  function filterWithTags(fonts, activeTags = [], searchText = "") {
+    const normalizedTags = normalizeTags(activeTags);
+    const normalizedSearch = String(searchText || "").trim().toLowerCase();
+    return (Array.isArray(fonts) ? fonts : []).filter((font) => {
+      if (typeof font !== "string" || !font) {
+        return false;
+      }
+      const fontTags = normalizeTags(getFontTags(font));
+      if (normalizedTags.length) {
+        const hasAllTags = normalizedTags.every((tag) => fontTags.includes(tag));
+        if (!hasAllTags) {
+          return false;
+        }
+        return !normalizedSearch || font.toLowerCase().includes(normalizedSearch);
+      }
+      if (!normalizedSearch) {
+        return true;
+      }
+      return font.toLowerCase().includes(normalizedSearch) || fontTags.some((tag) => tag.includes(normalizedSearch));
+    });
+  }
+
+  function sortFontResults(fonts, searchText = "") {
+    const normalizedSearch = String(searchText || "").trim().toLowerCase();
+    return (Array.isArray(fonts) ? fonts : []).slice().sort((left, right) => {
+      const leftRank = fontSearchRank(left, normalizedSearch);
+      const rightRank = fontSearchRank(right, normalizedSearch);
+      if (leftRank !== rightRank) {
+        return leftRank - rightRank;
+      }
+      return String(left).localeCompare(String(right));
+    });
+  }
+
+  function fontSearchRank(font, normalizedSearch) {
+    if (!normalizedSearch) {
+      return 0;
+    }
+    const normalizedFont = String(font || "").toLowerCase();
+    if (normalizedFont.includes(normalizedSearch)) {
+      return 0;
+    }
+    if (getFontTags(font).some((tag) => String(tag).toLowerCase().includes(normalizedSearch))) {
+      return 1;
+    }
+    return 2;
+  }
+
+  function normalizeTags(tags) {
+    return [...new Set((Array.isArray(tags) ? tags : []).filter((tag) => typeof tag === "string" && tag.trim()).map((tag) => tag.trim().toLowerCase()))];
+  }
+
+  function getFontTags(font) {
+    const tags = window.FONT_TAGS && window.FONT_TAGS[font];
+    return Array.isArray(tags) ? tags : [];
+  }
+
+  function getCommonFontTags(fonts = ui.availableFonts, limit = 5) {
+    const counts = new Map();
+    (Array.isArray(fonts) ? fonts : []).forEach((font) => {
+      normalizeTags(getFontTags(font)).forEach((tag) => {
+        counts.set(tag, (counts.get(tag) || 0) + 1);
+      });
+    });
+    return [...counts.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .slice(0, limit)
+      .map(([tag]) => tag);
+  }
+
+  function getAllFontTags(fonts = ui.availableFonts) {
+    const tags = new Set();
+    (Array.isArray(fonts) ? fonts : []).forEach((font) => {
+      normalizeTags(getFontTags(font)).forEach((tag) => tags.add(tag));
+    });
+    return [...tags].sort((left, right) => left.localeCompare(right));
   }
 
   function highlightedIndexForFont(font, options) {
@@ -427,10 +533,252 @@
     return index === -1 ? 0 : index;
   }
 
+  function highlightedIndexForSelectedFont(selectedFont, filter, fonts = ui.availableFonts) {
+    return highlightedIndexForFont(selectedFont, filterFontOptions(filter, fonts));
+  }
+
+  function getCycledFont(currentFont, direction, fonts = ui.availableFonts) {
+    const availableFonts = (Array.isArray(fonts) ? fonts : []).filter((font) => typeof font === "string" && font);
+    if (!availableFonts.length) {
+      return currentFont || "";
+    }
+
+    const delta = direction === "up" || direction === "previous" || direction < 0 ? -1 : 1;
+    const currentIndex = availableFonts.indexOf(currentFont);
+    if (currentIndex === -1) {
+      return delta > 0 ? availableFonts[0] : availableFonts[availableFonts.length - 1];
+    }
+    return availableFonts[(currentIndex + delta + availableFonts.length) % availableFonts.length];
+  }
+
+  function cycleFont(rowIndex, direction, input) {
+    const row = state.rows[rowIndex];
+    if (!row) {
+      return "";
+    }
+
+    const nextFont = getCycledFont(row.font, direction);
+    if (!nextFont) {
+      return row.font || "";
+    }
+
+    row.font = nextFont;
+
+    const comboboxState = getFontComboboxState(rowIndex);
+    comboboxState.open = false;
+    comboboxState.filter = "";
+    comboboxState.activeTags = [];
+    comboboxState.tagPanelOpen = false;
+    comboboxState.highlightIndex = highlightedIndexForFont(nextFont, ui.availableFonts);
+
+    const targetInput = input || fontComboboxInputForRow(rowIndex);
+    if (targetInput) {
+      targetInput.value = nextFont;
+      targetInput.setAttribute("aria-expanded", "false");
+      targetInput.removeAttribute("aria-activedescendant");
+    }
+
+    scheduleCyclePreview(nextFont);
+    scheduleCycleSave();
+    return nextFont;
+  }
+
+  function fontComboboxInputForRow(rowIndex) {
+    if (!document.querySelector) {
+      return null;
+    }
+    return document.querySelector(`.font-combobox[data-row-index="${rowIndex}"] .font-combobox-input`);
+  }
+
+  function scheduleCyclePreview(font) {
+    if (font) {
+      pendingCycleFonts.add(font);
+    }
+    clearScheduledTimeout(cyclePreviewTimer);
+    cyclePreviewTimer = scheduleTimeout(() => {
+      cyclePreviewTimer = null;
+      runPendingCyclePreview();
+    }, CYCLE_PREVIEW_DEBOUNCE_MS);
+  }
+
+  function scheduleCycleSave() {
+    clearScheduledTimeout(cycleSaveTimer);
+    cycleSaveTimer = scheduleTimeout(() => {
+      cycleSaveTimer = null;
+      runPendingCycleSave();
+    }, CYCLE_SAVE_DEBOUNCE_MS);
+  }
+
+  function flushCyclePending() {
+    const shouldRenderPreview = cyclePreviewTimer !== null || pendingCycleFonts.size > 0;
+    const shouldSave = cycleSaveTimer !== null;
+
+    clearScheduledTimeout(cyclePreviewTimer);
+    clearScheduledTimeout(cycleSaveTimer);
+    cyclePreviewTimer = null;
+    cycleSaveTimer = null;
+
+    if (shouldRenderPreview) {
+      runPendingCyclePreview();
+    }
+    if (shouldSave) {
+      runPendingCycleSave();
+    }
+  }
+
+  function runPendingCyclePreview() {
+    const fontsToLoad = [...pendingCycleFonts];
+    pendingCycleFonts.clear();
+    fontsToLoad.forEach((pendingFont) => {
+      void ensureFontLoaded(pendingFont, { selected: true });
+    });
+    void renderDerived();
+  }
+
+  function runPendingCycleSave() {
+    saveState();
+  }
+
+  function scheduleTimeout(callback, delay) {
+    if (typeof window !== "undefined" && typeof window.setTimeout === "function") {
+      return window.setTimeout(callback, delay);
+    }
+    if (typeof setTimeout === "function") {
+      return setTimeout(callback, delay);
+    }
+    callback();
+    return null;
+  }
+
+  function clearScheduledTimeout(timer) {
+    if (timer === null || timer === undefined) {
+      return;
+    }
+    if (typeof window !== "undefined" && typeof window.clearTimeout === "function") {
+      window.clearTimeout(timer);
+      return;
+    }
+    if (typeof clearTimeout === "function") {
+      clearTimeout(timer);
+    }
+  }
+
+  function openFontCombobox(rowIndex, listbox, input) {
+    flushCyclePending();
+    const comboboxState = getFontComboboxState(rowIndex);
+    const row = state.rows[rowIndex];
+    const wasOpen = comboboxState.open;
+    comboboxState.open = true;
+    if (!wasOpen) {
+      comboboxState.highlightIndex = highlightedIndexForSelectedFont(row && row.font, comboboxState.filter);
+    }
+    input.setAttribute("aria-expanded", "true");
+    listbox.hidden = false;
+    renderFontOptions(rowIndex, listbox, input);
+  }
+
+  function renderFontTagControls(rowIndex, container, listbox, input) {
+    const comboboxState = getFontComboboxState(rowIndex);
+    const commonTags = getCommonFontTags(ui.availableFonts, 5);
+    const allTags = getAllFontTags(ui.availableFonts);
+    const commonTagSet = new Set(commonTags);
+    const moreTags = allTags.filter((tag) => !commonTagSet.has(tag));
+    const activeTagSet = new Set(normalizeTags(comboboxState.activeTags));
+
+    container.replaceChildren();
+
+    const row = document.createElement("div");
+    row.className = "font-tag-row";
+    row.setAttribute("aria-label", "Filter fonts by tag");
+
+    if (!allTags.length) {
+      const empty = document.createElement("span");
+      empty.className = "font-tag-empty";
+      empty.textContent = "No font tags available";
+      row.append(empty);
+      container.append(row);
+      return;
+    }
+
+    commonTags.forEach((tag) => {
+      row.append(createTagChip(tag, activeTagSet.has(tag), () => {
+        toggleFontTag(rowIndex, tag, listbox, input, container);
+      }));
+    });
+
+    if (moreTags.length) {
+      const moreButton = document.createElement("button");
+      moreButton.type = "button";
+      moreButton.className = "font-tag-chip font-tag-more";
+      moreButton.classList.toggle("active", moreTags.some((tag) => activeTagSet.has(tag)));
+      moreButton.setAttribute("aria-expanded", String(comboboxState.tagPanelOpen));
+      moreButton.textContent = "More...";
+      moreButton.addEventListener("mousedown", preventComboboxBlur);
+      moreButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        comboboxState.tagPanelOpen = !comboboxState.tagPanelOpen;
+        openFontCombobox(rowIndex, listbox, input);
+        renderFontTagControls(rowIndex, container, listbox, input);
+      });
+      row.append(moreButton);
+    }
+
+    container.append(row);
+
+    if (comboboxState.tagPanelOpen && moreTags.length) {
+      const panel = document.createElement("div");
+      panel.className = "font-tag-panel";
+      panel.addEventListener("mousedown", preventComboboxBlur);
+      moreTags.forEach((tag) => {
+        panel.append(createTagChip(tag, activeTagSet.has(tag), () => {
+          toggleFontTag(rowIndex, tag, listbox, input, container);
+        }, "font-tag-panel-chip"));
+      });
+      container.append(panel);
+    }
+  }
+
+  function createTagChip(tag, active, onToggle, extraClass = "") {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = ["font-tag-chip", extraClass].filter(Boolean).join(" ");
+    chip.classList.toggle("active", active);
+    chip.setAttribute("aria-pressed", String(active));
+    chip.textContent = tag;
+    chip.addEventListener("mousedown", preventComboboxBlur);
+    chip.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onToggle();
+    });
+    return chip;
+  }
+
+  function toggleFontTag(rowIndex, tag, listbox, input, tagControls) {
+    const comboboxState = getFontComboboxState(rowIndex);
+    const normalizedTag = String(tag || "").trim().toLowerCase();
+    if (!normalizedTag) {
+      return;
+    }
+    const activeTags = normalizeTags(comboboxState.activeTags);
+    comboboxState.activeTags = activeTags.includes(normalizedTag)
+      ? activeTags.filter((activeTag) => activeTag !== normalizedTag)
+      : [...activeTags, normalizedTag];
+    comboboxState.highlightIndex = 0;
+    comboboxState.open = true;
+    input.setAttribute("aria-expanded", "true");
+    listbox.hidden = false;
+    renderFontTagControls(rowIndex, tagControls, listbox, input);
+    renderFontOptions(rowIndex, listbox, input);
+  }
+
+  function preventComboboxBlur(event) {
+    event.preventDefault();
+  }
+
   function renderFontOptions(rowIndex, listbox, input) {
     const comboboxState = getFontComboboxState(rowIndex);
     const row = state.rows[rowIndex];
-    const options = filterFontOptions(comboboxState.filter);
+    const options = getFilteredFontOptions(comboboxState);
     const maxIndex = Math.max(0, options.length - 1);
     comboboxState.highlightIndex = Math.min(Math.max(0, comboboxState.highlightIndex), maxIndex);
     listbox.replaceChildren();
@@ -439,7 +787,7 @@
       input.removeAttribute("aria-activedescendant");
       const empty = document.createElement("div");
       empty.className = "font-option empty";
-      empty.textContent = "No matching fonts";
+      empty.textContent = comboboxState.activeTags.length ? "No fonts match all selected tags" : "No matching fonts";
       listbox.append(empty);
       return;
     }
@@ -451,7 +799,7 @@
       option.dataset.fontName = font;
       option.setAttribute("role", "option");
       option.setAttribute("aria-selected", String(row && row.font === font));
-      option.textContent = font;
+      appendFontOptionContent(option, font);
       option.addEventListener("mousedown", (event) => {
         event.preventDefault();
         selectFontForRow(rowIndex, font);
@@ -463,31 +811,85 @@
       }
       listbox.append(option);
     });
+
+    if (comboboxState.open && !listbox.hidden) {
+      scrollHighlightedFontOption(listbox);
+    }
+  }
+
+  function appendFontOptionContent(option, font) {
+    const name = document.createElement("span");
+    name.className = "font-option-name";
+    name.textContent = font;
+
+    const tags = document.createElement("span");
+    tags.className = "font-option-tags";
+    tags.setAttribute("aria-hidden", "true");
+    getFontTags(font).forEach((tag) => {
+      const label = document.createElement("span");
+      label.className = "font-option-tag";
+      label.textContent = tag;
+      tags.append(label);
+    });
+
+    const status = document.createElement("span");
+    status.className = "font-option-status";
+    status.setAttribute("aria-hidden", "true");
+
+    option.append(name, tags, status);
+  }
+
+  function scrollHighlightedFontOption(listbox) {
+    const schedule = typeof window !== "undefined" && typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : (callback) => callback();
+    schedule(() => {
+      const highlightedOption = listbox.querySelector && listbox.querySelector(".font-option.highlighted");
+      if (highlightedOption && typeof highlightedOption.scrollIntoView === "function") {
+        highlightedOption.scrollIntoView({ block: "nearest" });
+      }
+    });
   }
 
   function handleFontComboboxKeydown(event, rowIndex, listbox, input) {
     const comboboxState = getFontComboboxState(rowIndex);
-    const options = filterFontOptions(comboboxState.filter);
+    if (!comboboxState.open) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        cycleFont(rowIndex, event.key === "ArrowDown" ? 1 : -1, input);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        openFontCombobox(rowIndex, listbox, input);
+        return;
+      }
+      if (isTextInputKey(event)) {
+        comboboxState.filter = "";
+        input.value = "";
+        openFontCombobox(rowIndex, listbox, input);
+      }
+      return;
+    }
+
+    const options = getFilteredFontOptions(comboboxState);
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      comboboxState.open = true;
       if (options.length) {
         const delta = event.key === "ArrowDown" ? 1 : -1;
         comboboxState.highlightIndex = (comboboxState.highlightIndex + delta + options.length) % options.length;
+        const highlightedFont = options[comboboxState.highlightIndex];
+        if (highlightedFont && state.rows[rowIndex]) {
+          state.rows[rowIndex].font = highlightedFont;
+          input.value = highlightedFont;
+          scheduleCyclePreview(highlightedFont);
+          scheduleCycleSave();
+        }
       }
-      input.setAttribute("aria-expanded", "true");
-      listbox.hidden = false;
       renderFontOptions(rowIndex, listbox, input);
       return;
     }
     if (event.key === "Enter") {
-      if (!comboboxState.open) {
-        comboboxState.open = true;
-        input.setAttribute("aria-expanded", "true");
-        listbox.hidden = false;
-        renderFontOptions(rowIndex, listbox, input);
-        return;
-      }
       event.preventDefault();
       if (options[comboboxState.highlightIndex]) {
         selectFontForRow(rowIndex, options[comboboxState.highlightIndex]);
@@ -500,6 +902,10 @@
     }
   }
 
+  function isTextInputKey(event) {
+    return event.key && event.key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey;
+  }
+
   function selectFontForRow(rowIndex, font) {
     if (!state.rows[rowIndex]) {
       return;
@@ -508,6 +914,8 @@
     const comboboxState = getFontComboboxState(rowIndex);
     comboboxState.open = false;
     comboboxState.filter = "";
+    comboboxState.activeTags = [];
+    comboboxState.tagPanelOpen = false;
     comboboxState.highlightIndex = 0;
     saveState();
     ensureFontLoaded(font, { selected: true });
@@ -528,8 +936,11 @@
     const comboboxState = getFontComboboxState(rowIndex);
     comboboxState.open = false;
     comboboxState.filter = "";
+    comboboxState.activeTags = [];
+    comboboxState.tagPanelOpen = false;
     const input = combobox.querySelector(".font-combobox-input");
     const listbox = combobox.querySelector(".font-listbox");
+    const tagControls = combobox.querySelector(".font-tag-controls");
     if (input) {
       input.value = row ? row.font : "";
       input.setAttribute("aria-expanded", "false");
@@ -538,6 +949,9 @@
     if (listbox) {
       listbox.hidden = true;
       listbox.replaceChildren();
+    }
+    if (tagControls && input && listbox) {
+      renderFontTagControls(rowIndex, tagControls, listbox, input);
     }
   }
 
@@ -558,7 +972,32 @@
     option.classList.toggle("failed", ui.failedFonts.has(font));
     option.classList.toggle("unloaded", !ui.loadedFonts.has(font));
     const status = ui.loadedFonts.has(font) ? "loaded" : ui.loadingFonts.has(font) ? "loading" : ui.failedFonts.has(font) ? "failed" : "not loaded";
+    const visibleStatus = status === "loading" || status === "failed" ? status : "";
+    const statusElement = findChildByClassName(option, "font-option-status");
+    if (statusElement) {
+      statusElement.textContent = visibleStatus ? capitalize(visibleStatus) : "";
+      statusElement.hidden = !visibleStatus;
+    }
     option.setAttribute("aria-label", `${font} (${status})`);
+  }
+
+  function findChildByClassName(element, className) {
+    if (!element) {
+      return null;
+    }
+    if (typeof element.querySelector === "function") {
+      const found = element.querySelector(`.${className}`);
+      if (found) {
+        return found;
+      }
+    }
+    const children = Array.isArray(element.children) ? element.children : Array.from(element.children || []);
+    return children.find((child) => child.className === className || (child.classList && child.classList.contains(className))) || null;
+  }
+
+  function capitalize(value) {
+    const stringValue = String(value || "");
+    return stringValue ? `${stringValue.charAt(0).toUpperCase()}${stringValue.slice(1)}` : "";
   }
 
   function createRowButton(text, onClick, variant = "subtle") {
@@ -1107,11 +1546,32 @@
     return -1;
   }
 
+  if (typeof window !== "undefined") {
+    window.filterWithTags = filterWithTags;
+    window.sortFontResults = sortFontResults;
+  }
+
   if (typeof window !== "undefined" && window.__LOGO_BUILDER_TEST__) {
     window.__logoBuilderInternals = {
+      cycleFont,
+      els,
       filterFontOptions,
+      filterWithTags,
+      flushCyclePending,
+      getAllFontTags,
+      getCommonFontTags,
+      getCycledFont,
+      getFilteredFontOptions,
+      handleFontComboboxKeydown,
+      highlightedIndexForSelectedFont,
       loadFontAsync,
+      openFontCombobox,
       renderBlocksToLines,
+      renderFontOptions,
+      scrollHighlightedFontOption,
+      sortFontResults,
+      state,
+      ui,
       trimBlankLines,
       rightTrim,
     };
