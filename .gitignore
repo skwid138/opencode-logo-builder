@@ -2,3 +2,5 @@
 vendor/*
 !vendor/figlet.js
 !vendor/Standard.js
+!vendor/fonts/
+!vendor/fonts/*.flf
