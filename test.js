@@ -4,6 +4,7 @@ const path = require("path");
 const vm = require("vm");
 
 const figlet = require("./vendor/figlet");
+const { renderWithOwnership } = require("./figlet-color-map");
 
 function loadImportableFont(fontName) {
   const fontPath = path.join(__dirname, "vendor", `${fontName}.js`);
@@ -13,7 +14,7 @@ function loadImportableFont(fontName) {
   figlet.parseFont(fontName, module.exports);
 }
 
-function loadLogoBuilderInternals() {
+function loadLogoBuilderInternals(windowExtras = {}) {
   const source = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
   const sandbox = {
     console,
@@ -23,6 +24,7 @@ function loadLogoBuilderInternals() {
     window: {
       __LOGO_BUILDER_TEST__: true,
       figlet,
+      ...windowExtras,
     },
   };
   vm.createContext(sandbox);
@@ -47,6 +49,10 @@ function renderText(text) {
     horizontalLayout: "default",
     verticalLayout: "default",
   });
+}
+
+function renderOwned(blocks, fontName = "Standard", options = {}) {
+  return renderWithOwnership(blocks, fontName, { figlet, ...options });
 }
 
 test("Figlet renders Standard font text", () => {
@@ -132,6 +138,115 @@ test("empty segments are filtered from rendered export rows", () => {
       assert.notStrictEqual(segment.color, "#FF0000");
     });
   });
+});
+
+test("ownership render keeps owner widths matched to rendered line widths", () => {
+  const rendered = renderOwned([
+    { text: "Just", color: "#111111" },
+    { text: "Vibes", color: "#222222" },
+  ]);
+
+  assert.strictEqual(rendered.lines.length, rendered.owners.length);
+  rendered.lines.forEach((line, lineIndex) => {
+    assert.strictEqual(rendered.owners[lineIndex].length, line.length, `owner row ${lineIndex} should match rendered width`);
+  });
+  assert.strictEqual(Math.max(...rendered.lines.map((line) => line.length)), 47, "JustVibes Standard width should stay seamless");
+});
+
+test("single-block ownership assigns every cell to original block 0", () => {
+  const rendered = renderOwned([{ text: "A", color: "#111111" }]);
+  assert.ok(rendered.lines.length > 0, "expected rendered lines");
+  rendered.owners.forEach((ownerRow) => {
+    assert.ok(ownerRow.length > 0, "expected owners for visible row");
+    assert.ok(ownerRow.every((owner) => owner === 0), `expected only owner 0, got ${ownerRow.join(",")}`);
+  });
+});
+
+test("two-block ownership moves the boundary through smushed columns", () => {
+  const rendered = renderOwned([
+    { text: "Just", color: "#111111" },
+    { text: "Vibes", color: "#222222" },
+  ]);
+  const justWidth = Math.max(...trimBlankLines(renderText("Just").split("\n")).map(rightTrim).map((line) => line.length));
+
+  assert.ok(rendered.owners.some((ownerRow) => ownerRow.indexOf(1) !== -1 && ownerRow.indexOf(1) < justWidth), "right block should own non-blank overlap columns");
+  assert.ok(
+    rendered.owners.some((ownerRow) => {
+      const firstRight = ownerRow.indexOf(1);
+      return firstRight !== -1 && ownerRow.indexOf(0, firstRight) !== -1 && ownerRow.lastIndexOf(1) > ownerRow.indexOf(0, firstRight);
+    }),
+    "left owner should be preserved when the right overlap character is blank",
+  );
+});
+
+test("empty ownership blocks are filtered while owner IDs map to original block indexes", () => {
+  const rendered = renderOwned([
+    { text: "A", color: "#111111" },
+    { text: "", color: "#FF0000" },
+    { text: "B", color: "#222222" },
+  ]);
+  const owners = new Set(rendered.owners.flat());
+
+  assert.ok(owners.has(0), "expected owner 0");
+  assert.ok(owners.has(2), "expected owner 2 mapped through empty block");
+  assert.ok(!owners.has(1), "empty original block should not own rendered cells");
+});
+
+test("figlet without _blockBoundaries remains a normal passthrough", () => {
+  delete figlet._lastOwners;
+  const normal = renderText("AB");
+  assert.strictEqual(normal, figlet.textSync("AB", {
+    font: "Standard",
+    horizontalLayout: "default",
+    verticalLayout: "default",
+  }));
+  assert.ok(!Object.prototype.hasOwnProperty.call(figlet, "_lastOwners"), "no-boundary render should not write _lastOwners");
+});
+
+test("ownership wrapper enforces no-newline and no-width preconditions", () => {
+  assert.throws(() => renderOwned([{ text: "A\nB", color: "#111111" }]), /newline/i);
+  assert.throws(() => renderOwned([{ text: "A", color: "#111111" }], "Standard", { width: 20 }), /width/i);
+});
+
+test("ownership wrapper falls back visibly when owner widths do not match output", () => {
+  const fakeFiglet = {
+    textSync(text, options) {
+      if (options._blockBoundaries) {
+        this._lastOwners = [[]];
+        return "AB";
+      }
+      return text;
+    },
+  };
+
+  const rendered = renderWithOwnership([
+    { text: "A", color: "#111111" },
+    { text: "B", color: "#222222" },
+  ], "Standard", { figlet: fakeFiglet });
+
+  assert.strictEqual(rendered.fallback, true);
+  assert.match(rendered.warning, /fallback rendering/i);
+  assert.deepStrictEqual(rendered.lines, ["AB"]);
+  assert.deepStrictEqual(rendered.owners, [[0, 1]]);
+});
+
+test("app render path uses ownership renderer for seamless final rows", () => {
+  const internals = loadLogoBuilderInternals({
+    renderWithOwnership: (blocks, fontName) => renderWithOwnership(blocks, fontName, { figlet }),
+  });
+  const rendered = internals.renderBlocksToLines(
+    [
+      { text: "Just", color: "#111111" },
+      { text: "Vibes", color: "#222222" },
+    ],
+    "Standard",
+    figlet,
+  );
+
+  const lines = rendered.rows.map((row) => row.segments.map((segment) => segment.text).join(""));
+  assert.strictEqual(Math.max(...lines.map((line) => line.length)), 47);
+  assert.ok(rendered.rows.some((row) => row.segments.some((segment) => segment.color === "#222222")), "expected second block color in ownership segments");
+  assert.strictEqual(rendered.warnings.length, 0);
 });
 
 let failed = 0;
