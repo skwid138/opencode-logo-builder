@@ -109,7 +109,7 @@
 
     els.previewBackgroundInput.addEventListener("input", (event) => {
       ui.previewBackground = normalizeColor(event.target.value, ui.previewBackground);
-      renderDerived();
+      void renderDerived();
     });
 
     els.addRowButton.addEventListener("click", () => {
@@ -583,7 +583,7 @@
     textInput.addEventListener("input", (event) => {
       state.rows[rowIndex].blocks[blockIndex].text = event.target.value;
       saveState();
-      renderDerived();
+      void renderDerived();
     });
     textLabel.append(textLabelText, textInput);
 
@@ -599,7 +599,7 @@
       state.rows[rowIndex].blocks[blockIndex].color = color;
       hexInput.value = color;
       saveState();
-      renderDerived();
+      void renderDerived();
     });
     colorLabel.append(colorLabelText, colorInput);
 
@@ -625,7 +625,7 @@
       hexInput.value = color;
       hexInput.classList.remove("invalid");
       saveState();
-      renderDerived();
+      void renderDerived();
     });
     hexInput.addEventListener("blur", () => {
       const currentColor = state.rows[rowIndex].blocks[blockIndex].color;
@@ -760,7 +760,7 @@
 
       if (!rendered.rows.length) {
         result.warnings.push(`Row ${rowIndex + 1}: no blocks rendered, so the row was skipped.`);
-        return;
+        continue;
       }
 
       rendered.rows.forEach((renderedRow) => {
@@ -944,7 +944,7 @@
   async function copyText(text) {
     if (!text) {
       ui.copyStatus = "Nothing to copy yet.";
-      renderDerived();
+      void renderDerived();
       return;
     }
     try {
@@ -962,7 +962,7 @@
         ui.copyStatus = "Copy failed. Select the export text and copy manually.";
       }
     }
-    renderDerived();
+    void renderDerived();
   }
 
   function fallbackCopy(text) {
