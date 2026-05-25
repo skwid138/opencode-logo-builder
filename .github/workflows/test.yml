@@ -7,5 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify font manifest
+        run: node scripts/verify-font-manifest.js
       - name: Run rendering tests
         run: node test.js
