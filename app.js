@@ -86,8 +86,7 @@
     els.fontStatus = document.getElementById("fontStatus");
     els.messages = document.getElementById("messages");
     els.rowsContainer = document.getElementById("rowsContainer");
-    els.builderPreview = document.getElementById("builderPreview");
-    els.finalPreview = document.getElementById("finalPreview");
+    els.preview = document.getElementById("preview");
     els.copyExportButton = document.getElementById("copyExportButton");
     els.copyStatus = document.getElementById("copyStatus");
     els.exportOutput = document.getElementById("exportOutput");
@@ -431,8 +430,7 @@
 
   function renderDerived() {
     els.previewBackgroundInput.value = ui.previewBackground;
-    els.builderPreview.style.backgroundColor = ui.previewBackground;
-    els.finalPreview.style.backgroundColor = ui.previewBackground;
+    els.preview.style.backgroundColor = ui.previewBackground;
 
     const result = renderLogo();
     ui.lastRenderResult = result;
@@ -440,8 +438,7 @@
 
     renderFontStatus();
     renderMessages(result);
-    renderPreview(els.builderPreview, result.lines, true);
-    renderPreview(els.finalPreview, result.lines, false);
+    renderPreview(els.preview, result.lines);
     els.exportOutput.textContent = ui.lastExportText;
     els.copyStatus.textContent = ui.copyStatus;
     els.copyExportButton.disabled = Boolean(ui.fatalError) || selectedFonts().some((font) => ui.loadingFonts.has(font));
@@ -482,7 +479,7 @@
     els.messages.append(message);
   }
 
-  function renderPreview(container, lines, builderMode) {
+  function renderPreview(container, lines) {
     container.replaceChildren();
     if (!lines.length) {
       const empty = document.createElement("div");
@@ -498,9 +495,6 @@
       line.segments.forEach((segment) => {
         const span = document.createElement("span");
         span.style.color = segment.color;
-        if (builderMode && segment.text.trim() !== "") {
-          span.className = "builder-segment";
-        }
         span.textContent = segment.text;
         lineEl.append(span);
       });
