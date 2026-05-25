@@ -1,2 +1,4 @@
 .project-plans
-vendor/
+vendor/*
+!vendor/figlet.js
+!vendor/Standard.js
