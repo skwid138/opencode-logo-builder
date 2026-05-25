@@ -22,7 +22,7 @@ Font names, editor metadata, and preview background settings are not exported.
 
 Open `index.html` directly in a browser. There is no framework, bundler, package manager, or build step.
 
-The app loads `figlet.js` and font files from the public CDN at `unpkg.com`, so rendering requires network access unless those browser requests are already cached.
+The app uses a vendored copy of `figlet.js` v1.8.0 at `vendor/figlet.js` with a small ownership side-channel patch documented in [`PATCH.md`](PATCH.md). FIGlet font files still load from the public CDN at `unpkg.com`, so non-vendored fonts require network access unless those browser requests are already cached. `vendor/Standard.js` is committed for local tests.
 
 ## Deployment
 
