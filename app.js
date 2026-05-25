@@ -7,7 +7,10 @@
   const TEAL = "#5DBDB3";
   const PINK = "#F8B4C4";
   const DEFAULT_PREVIEW_BACKGROUND = "#0B1020";
-  const FONT_PATH = "https://unpkg.com/figlet@1.8.0/fonts";
+  const FONT_CDN_PATH = "https://unpkg.com/figlet@1.8.0/fonts";
+  const LOCAL_FONT_PATH = "vendor/fonts";
+  const BACKGROUND_FONT_BATCH_SIZE = 30;
+  const BACKGROUND_FONT_BATCH_DELAY_MS = 100;
   const HEX_COLOR_RE = /^#?[0-9a-fA-F]{6}$/;
   const CURATED_FONTS = [
     "Standard",
@@ -21,29 +24,7 @@
     "Block",
     "Shadow",
   ];
-  const FALLBACK_EXTRA_FONTS = [
-    "3-D",
-    "ANSI Shadow",
-    "Avatar",
-    "Basic",
-    "Bubble",
-    "Chunky",
-    "Colossal",
-    "Cosmic",
-    "Epic",
-    "Ghost",
-    "Graffiti",
-    "Larry 3D",
-    "Lean",
-    "Ogre",
-    "Puffy",
-    "Rectangles",
-    "Roman",
-    "Speed",
-    "Star Wars",
-    "Stop",
-    "Univers",
-  ];
+  const fontCache = new Map();
 
   const state = {
     rows: cloneDefaultState().rows,
@@ -55,25 +36,28 @@
     storageNote: "",
     fatalError: "",
     copyStatus: "",
-    availableFonts: [...new Set([...CURATED_FONTS, ...FALLBACK_EXTRA_FONTS])],
+    availableFonts: sortedUniqueFonts(typeof window !== "undefined" && Array.isArray(window.ALL_FONTS) ? window.ALL_FONTS : CURATED_FONTS),
     loadedFonts: new Set(),
     loadingFonts: new Set(),
     failedFonts: new Map(),
-    fontPromises: new Map(),
+    fontComboboxes: new Map(),
     lastExportText: "",
     lastRenderResult: null,
+    renderSequence: 0,
   };
 
   const els = {};
 
-  document.addEventListener("DOMContentLoaded", init);
+  document.addEventListener("DOMContentLoaded", () => {
+    void init();
+  });
 
-  function init() {
+  async function init() {
     cacheElements();
     applyInitialTheme();
     restoreState();
     wireGlobalControls();
-    initializeFiglet();
+    await initializeFiglet();
     renderApp();
   }
 
@@ -133,6 +117,7 @@
         font: "Standard",
         blocks: [{ text: "", color: nextDefaultColor(0) }],
       });
+      ui.fontComboboxes.clear();
       saveState();
       ensureFontLoaded("Standard", { selected: true });
       renderApp();
@@ -144,6 +129,7 @@
       }
       const defaults = cloneDefaultState();
       state.rows = defaults.rows;
+      ui.fontComboboxes.clear();
       ui.previewBackground = DEFAULT_PREVIEW_BACKGROUND;
       els.previewBackgroundInput.value = ui.previewBackground;
       saveState();
@@ -154,113 +140,145 @@
     els.copyExportButton.addEventListener("click", async () => {
       await copyText(ui.lastExportText);
     });
+
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest || !event.target.closest(".font-combobox")) {
+        closeAllFontComboboxes();
+      }
+    });
   }
 
-  function initializeFiglet() {
-    if (!window.figlet || typeof window.figlet.loadFont !== "function") {
+  async function initializeFiglet() {
+    ui.availableFonts = mergeAvailableFonts(selectedFonts());
+
+    if (!window.figlet || typeof window.figlet.parseFont !== "function" || typeof window.figlet.textSync !== "function") {
       ui.fatalError = "The vendored figlet.js library did not load. Check the local vendor file and refresh.";
-      renderApp();
       return;
     }
 
     if (typeof window.figlet.defaults === "function") {
-      window.figlet.defaults({ fontPath: FONT_PATH, fetchFontIfMissing: true });
-    }
-
-    discoverAvailableFonts();
-    CURATED_FONTS.forEach((font) => loadFont(font, { selected: isSelectedFont(font) }));
-    window.requestAnimationFrame(() => {
-      setTimeout(loadRemainingFonts, 0);
-    });
-  }
-
-  function discoverAvailableFonts() {
-    if (!window.figlet || typeof window.figlet.fonts !== "function") {
-      return;
+      window.figlet.defaults({ fontPath: "", fetchFontIfMissing: false });
     }
 
     try {
-      window.figlet.fonts((error, fonts) => {
-        if (error || !Array.isArray(fonts)) {
-          return;
-        }
-        ui.availableFonts = mergeFonts(fonts);
-        loadRemainingFonts();
-        renderApp();
-      });
+      await loadFontAsync("Standard", { selected: true });
     } catch (error) {
-      // Fall back to the curated list. A failed font discovery should not break rendering.
+      // Rendering will surface the selected-font failure. Continue so the UI remains usable.
     }
-  }
 
-  function mergeFonts(discoveredFonts) {
-    const selectedFonts = state.rows.map((row) => row.font).filter(Boolean);
-    return [...new Set([...CURATED_FONTS, ...selectedFonts, ...discoveredFonts, ...FALLBACK_EXTRA_FONTS])].sort((a, b) => {
-      const curatedA = CURATED_FONTS.indexOf(a);
-      const curatedB = CURATED_FONTS.indexOf(b);
-      if (curatedA !== -1 || curatedB !== -1) {
-        if (curatedA === -1) return 1;
-        if (curatedB === -1) return -1;
-        return curatedA - curatedB;
-      }
-      return a.localeCompare(b);
-    });
-  }
-
-  function loadRemainingFonts() {
-    ui.availableFonts
-      .filter((font) => !CURATED_FONTS.includes(font))
-      .forEach((font, index) => {
-        setTimeout(() => loadFont(font, { selected: isSelectedFont(font), background: true }), index * 18);
+    CURATED_FONTS
+      .filter((font) => font !== "Standard")
+      .forEach((font) => {
+        void loadFontAsync(font, { selected: isSelectedFont(font), background: true }).catch(() => {});
       });
+
+    scheduleBackgroundFontLoading();
+  }
+
+  function mergeAvailableFonts(extraFonts = []) {
+    const manifestFonts = typeof window !== "undefined" && Array.isArray(window.ALL_FONTS) ? window.ALL_FONTS : CURATED_FONTS;
+    return sortedUniqueFonts([...manifestFonts, ...extraFonts.filter(Boolean)]);
+  }
+
+  function scheduleBackgroundFontLoading() {
+    const remainingFonts = ui.availableFonts.filter((font) => !CURATED_FONTS.includes(font));
+    for (let start = 0; start < remainingFonts.length; start += BACKGROUND_FONT_BATCH_SIZE) {
+      const batch = remainingFonts.slice(start, start + BACKGROUND_FONT_BATCH_SIZE);
+      const batchIndex = start / BACKGROUND_FONT_BATCH_SIZE;
+      setTimeout(() => {
+        batch.forEach((font) => {
+          void loadFontAsync(font, { selected: isSelectedFont(font), background: true }).catch(() => {});
+        });
+      }, batchIndex * BACKGROUND_FONT_BATCH_DELAY_MS);
+    }
   }
 
   function ensureSelectedFontsLoaded() {
-    selectedFonts().forEach((font) => loadFont(font, { selected: true }));
+    selectedFonts().forEach((font) => {
+      void loadFontAsync(font, { selected: true }).catch(() => {});
+    });
   }
 
-  function loadFont(font, options = {}) {
-    if (!font || ui.loadedFonts.has(font) || ui.failedFonts.has(font)) {
-      return Promise.resolve();
+  function loadFontAsync(fontName, options = {}) {
+    const font = typeof fontName === "string" && fontName ? fontName : "Standard";
+    if (ui.loadedFonts.has(font)) {
+      return Promise.resolve(font);
     }
-    if (ui.fontPromises.has(font)) {
-      return ui.fontPromises.get(font);
+    if (fontCache.has(font)) {
+      return fontCache.get(font);
     }
-    if (!window.figlet || typeof window.figlet.loadFont !== "function") {
-      return Promise.resolve();
+    if (!window.figlet || typeof window.figlet.parseFont !== "function") {
+      return Promise.reject(new Error("figlet.parseFont is unavailable"));
     }
 
     ui.loadingFonts.add(font);
-    if (options.selected && !options.background) {
-      renderApp();
-    } else if (options.selected) {
-      renderDerived();
-    }
+    ui.failedFonts.delete(font);
+    refreshFontLoadingUi(font, options);
 
-    const promise = Promise.resolve()
-      .then(() => window.figlet.loadFont(font, () => {}))
+    const promise = fetchFontText(font)
       .then(() => {
+        // fetchFontText parses and registers the font before resolving.
         ui.loadedFonts.add(font);
         ui.failedFonts.delete(font);
+        return font;
       })
       .catch((error) => {
+        fontCache.delete(font);
         ui.failedFonts.set(font, error instanceof Error ? error.message : String(error));
+        throw error;
       })
       .finally(() => {
         ui.loadingFonts.delete(font);
-        ui.fontPromises.delete(font);
-        if (options.selected || isSelectedFont(font)) {
-          renderApp();
+        refreshFontLoadingUi(font, options);
+        if ((options.selected || isSelectedFont(font)) && !options.silent) {
+          void renderDerived();
         }
       });
 
-    ui.fontPromises.set(font, promise);
+    fontCache.set(font, promise);
     return promise;
+  }
+
+  async function fetchFontText(font) {
+    const localUrl = fontUrl(LOCAL_FONT_PATH, font);
+    const cdnUrl = fontUrl(FONT_CDN_PATH, font);
+    const response = await fetchFontResponse(localUrl).catch(() => fetchFontResponse(cdnUrl));
+    const data = await response.text();
+    window.figlet.parseFont(font, data);
+    return data;
+  }
+
+  function fontUrl(basePath, font) {
+    return `${basePath}/${encodeURIComponent(font)}.flf`;
+  }
+
+  function fetchFontResponse(url) {
+    const fetchImpl = typeof window.fetch === "function" ? window.fetch.bind(window) : typeof fetch === "function" ? fetch : null;
+    if (!fetchImpl) {
+      return Promise.reject(new Error("fetch is unavailable"));
+    }
+    return fetchImpl(url).then((response) => {
+      if (!response || !response.ok) {
+        const status = response && typeof response.status !== "undefined" ? response.status : "unknown";
+        throw new Error(`Font fetch failed (${status}) for ${url}`);
+      }
+      return response;
+    });
+  }
+
+  function refreshFontLoadingUi(font, options = {}) {
+    updateFontOptionState(font);
+    if (els.fontStatus) {
+      renderFontStatus();
+    }
+    if (options.selected && !options.background && els.copyExportButton) {
+      els.copyExportButton.disabled = selectedFonts().some((selectedFont) => ui.loadingFonts.has(selectedFont));
+    }
   }
 
   function renderApp() {
     renderEditor();
-    renderDerived();
+    void renderDerived();
   }
 
   function renderEditor() {
@@ -317,28 +335,228 @@
   }
 
   function createFontField(row, rowIndex) {
-    const label = document.createElement("label");
-    label.className = "field";
-    const text = document.createElement("span");
-    text.textContent = "Font";
-    const select = document.createElement("select");
     ensureFontOptionPresent(row.font);
-    ui.availableFonts.forEach((font) => {
-      const option = document.createElement("option");
-      option.value = font;
-      const suffix = ui.loadingFonts.has(font) ? " (loading)" : ui.failedFonts.has(font) ? " (failed)" : "";
-      option.textContent = `${font}${suffix}`;
-      select.append(option);
+    const comboboxState = getFontComboboxState(rowIndex);
+    const field = document.createElement("div");
+    field.className = "field font-field";
+    const text = document.createElement("span");
+    text.id = `font-label-${rowIndex}`;
+    text.textContent = "Font";
+
+    const combobox = document.createElement("div");
+    combobox.className = "font-combobox";
+    combobox.dataset.rowIndex = String(rowIndex);
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "font-combobox-input";
+    input.value = comboboxState.open ? comboboxState.filter : row.font;
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.setAttribute("role", "combobox");
+    input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-labelledby", text.id);
+    input.setAttribute("aria-expanded", String(comboboxState.open));
+    input.setAttribute("aria-controls", `font-listbox-${rowIndex}`);
+
+    const listbox = document.createElement("div");
+    listbox.id = `font-listbox-${rowIndex}`;
+    listbox.className = "font-listbox";
+    listbox.setAttribute("role", "listbox");
+    listbox.hidden = !comboboxState.open;
+
+    const openList = () => {
+      comboboxState.open = true;
+      input.setAttribute("aria-expanded", "true");
+      listbox.hidden = false;
+      renderFontOptions(rowIndex, listbox, input);
+    };
+
+    input.addEventListener("focus", () => {
+      comboboxState.filter = "";
+      comboboxState.highlightIndex = highlightedIndexForFont(row.font, filterFontOptions(""));
+      openList();
+      input.select();
     });
-    select.value = row.font;
-    select.addEventListener("change", (event) => {
-      state.rows[rowIndex].font = event.target.value;
-      saveState();
-      ensureFontLoaded(event.target.value, { selected: true });
-      renderApp();
+    input.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openList();
     });
-    label.append(text, select);
-    return label;
+    input.addEventListener("input", (event) => {
+      comboboxState.filter = event.target.value;
+      comboboxState.open = true;
+      comboboxState.highlightIndex = 0;
+      renderFontOptions(rowIndex, listbox, input);
+    });
+    input.addEventListener("keydown", (event) => {
+      handleFontComboboxKeydown(event, rowIndex, listbox, input);
+    });
+    combobox.addEventListener("focusout", () => {
+      setTimeout(() => {
+        if (!combobox.contains(document.activeElement)) {
+          closeFontCombobox(rowIndex, combobox);
+        }
+      }, 0);
+    });
+
+    renderFontOptions(rowIndex, listbox, input);
+    combobox.append(input, listbox);
+    field.append(text, combobox);
+    return field;
+  }
+
+  function getFontComboboxState(rowIndex) {
+    if (!ui.fontComboboxes.has(rowIndex)) {
+      ui.fontComboboxes.set(rowIndex, { filter: "", open: false, highlightIndex: 0 });
+    }
+    return ui.fontComboboxes.get(rowIndex);
+  }
+
+  function filterFontOptions(filter, fonts = ui.availableFonts) {
+    const normalizedFilter = String(filter || "").trim().toLowerCase();
+    if (!normalizedFilter) {
+      return fonts.slice();
+    }
+    return fonts.filter((font) => font.toLowerCase().includes(normalizedFilter));
+  }
+
+  function highlightedIndexForFont(font, options) {
+    const index = options.indexOf(font);
+    return index === -1 ? 0 : index;
+  }
+
+  function renderFontOptions(rowIndex, listbox, input) {
+    const comboboxState = getFontComboboxState(rowIndex);
+    const row = state.rows[rowIndex];
+    const options = filterFontOptions(comboboxState.filter);
+    const maxIndex = Math.max(0, options.length - 1);
+    comboboxState.highlightIndex = Math.min(Math.max(0, comboboxState.highlightIndex), maxIndex);
+    listbox.replaceChildren();
+
+    if (!options.length) {
+      input.removeAttribute("aria-activedescendant");
+      const empty = document.createElement("div");
+      empty.className = "font-option empty";
+      empty.textContent = "No matching fonts";
+      listbox.append(empty);
+      return;
+    }
+
+    options.forEach((font, optionIndex) => {
+      const option = document.createElement("div");
+      option.id = `font-option-${rowIndex}-${optionIndex}`;
+      option.className = "font-option";
+      option.dataset.fontName = font;
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", String(row && row.font === font));
+      option.textContent = font;
+      option.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        selectFontForRow(rowIndex, font);
+      });
+      applyFontOptionState(option, font);
+      if (optionIndex === comboboxState.highlightIndex) {
+        option.classList.add("highlighted");
+        input.setAttribute("aria-activedescendant", option.id);
+      }
+      listbox.append(option);
+    });
+  }
+
+  function handleFontComboboxKeydown(event, rowIndex, listbox, input) {
+    const comboboxState = getFontComboboxState(rowIndex);
+    const options = filterFontOptions(comboboxState.filter);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      comboboxState.open = true;
+      if (options.length) {
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        comboboxState.highlightIndex = (comboboxState.highlightIndex + delta + options.length) % options.length;
+      }
+      input.setAttribute("aria-expanded", "true");
+      listbox.hidden = false;
+      renderFontOptions(rowIndex, listbox, input);
+      return;
+    }
+    if (event.key === "Enter") {
+      if (!comboboxState.open) {
+        comboboxState.open = true;
+        input.setAttribute("aria-expanded", "true");
+        listbox.hidden = false;
+        renderFontOptions(rowIndex, listbox, input);
+        return;
+      }
+      event.preventDefault();
+      if (options[comboboxState.highlightIndex]) {
+        selectFontForRow(rowIndex, options[comboboxState.highlightIndex]);
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeFontCombobox(rowIndex, input.closest(".font-combobox"));
+    }
+  }
+
+  function selectFontForRow(rowIndex, font) {
+    if (!state.rows[rowIndex]) {
+      return;
+    }
+    state.rows[rowIndex].font = font;
+    const comboboxState = getFontComboboxState(rowIndex);
+    comboboxState.open = false;
+    comboboxState.filter = "";
+    comboboxState.highlightIndex = 0;
+    saveState();
+    ensureFontLoaded(font, { selected: true });
+    renderApp();
+  }
+
+  function closeAllFontComboboxes() {
+    document.querySelectorAll(".font-combobox").forEach((combobox) => {
+      closeFontCombobox(Number(combobox.dataset.rowIndex), combobox);
+    });
+  }
+
+  function closeFontCombobox(rowIndex, combobox) {
+    if (!combobox) {
+      return;
+    }
+    const row = state.rows[rowIndex];
+    const comboboxState = getFontComboboxState(rowIndex);
+    comboboxState.open = false;
+    comboboxState.filter = "";
+    const input = combobox.querySelector(".font-combobox-input");
+    const listbox = combobox.querySelector(".font-listbox");
+    if (input) {
+      input.value = row ? row.font : "";
+      input.setAttribute("aria-expanded", "false");
+      input.removeAttribute("aria-activedescendant");
+    }
+    if (listbox) {
+      listbox.hidden = true;
+      listbox.replaceChildren();
+    }
+  }
+
+  function updateFontOptionState(font) {
+    if (!document.querySelectorAll) {
+      return;
+    }
+    document.querySelectorAll(".font-option[data-font-name]").forEach((option) => {
+      if (option.dataset.fontName === font) {
+        applyFontOptionState(option, font);
+      }
+    });
+  }
+
+  function applyFontOptionState(option, font) {
+    option.classList.toggle("loaded", ui.loadedFonts.has(font));
+    option.classList.toggle("loading", ui.loadingFonts.has(font));
+    option.classList.toggle("failed", ui.failedFonts.has(font));
+    option.classList.toggle("unloaded", !ui.loadedFonts.has(font));
+    const status = ui.loadedFonts.has(font) ? "loaded" : ui.loadingFonts.has(font) ? "loading" : ui.failedFonts.has(font) ? "failed" : "not loaded";
+    option.setAttribute("aria-label", `${font} (${status})`);
   }
 
   function createRowButton(text, onClick, variant = "subtle") {
@@ -428,11 +646,15 @@
     return card;
   }
 
-  function renderDerived() {
+  async function renderDerived() {
+    const renderId = (ui.renderSequence += 1);
     els.previewBackgroundInput.value = ui.previewBackground;
     els.preview.style.backgroundColor = ui.previewBackground;
 
-    const result = renderLogo();
+    const result = await renderLogo();
+    if (renderId !== ui.renderSequence) {
+      return;
+    }
     ui.lastRenderResult = result;
     ui.lastExportText = buildExportText(result.logo);
 
@@ -502,7 +724,7 @@
     });
   }
 
-  function renderLogo() {
+  async function renderLogo() {
     const result = {
       logo: { rows: [] },
       lines: [],
@@ -516,20 +738,15 @@
       return result;
     }
 
-    state.rows.forEach((row, rowIndex) => {
+    for (let rowIndex = 0; rowIndex < state.rows.length; rowIndex += 1) {
+      const row = state.rows[rowIndex];
       const font = row.font || "Standard";
-      if (ui.loadingFonts.has(font)) {
-        result.warnings.push(`Row ${rowIndex + 1}: font “${font}” is still loading.`);
-        return;
-      }
-      if (ui.failedFonts.has(font)) {
-        result.errors.push(`Row ${rowIndex + 1}: font “${font}” failed to load and was skipped.`);
-        return;
-      }
-      if (!ui.loadedFonts.has(font)) {
-        loadFont(font, { selected: true });
-        result.warnings.push(`Row ${rowIndex + 1}: font “${font}” has not loaded yet.`);
-        return;
+      try {
+        await loadFontAsync(font, { selected: true, silent: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        result.errors.push(`Row ${rowIndex + 1}: font “${font}” failed to load and was skipped (${message}).`);
+        continue;
       }
 
       const rendered = renderBlocksToLines(row.blocks, font, window.figlet);
@@ -553,7 +770,7 @@
         result.lines.push(renderedRow);
         result.renderedRowCount += 1;
       });
-    });
+    }
 
     if (result.renderedRowCount >= 20) {
       result.warnings.push(`The logo renders ${result.renderedRowCount} plugin rows. That may be tall for a terminal header.`);
@@ -719,6 +936,7 @@
 
   function removeRow(rowIndex) {
     state.rows.splice(rowIndex, 1);
+    ui.fontComboboxes.clear();
     saveState();
     renderApp();
   }
@@ -850,13 +1068,17 @@
   }
 
   function ensureFontLoaded(font, options) {
-    return loadFont(font, options);
+    return loadFontAsync(font, options).catch(() => {});
   }
 
   function ensureFontOptionPresent(font) {
     if (font && !ui.availableFonts.includes(font)) {
-      ui.availableFonts = mergeFonts([font]);
+      ui.availableFonts = mergeAvailableFonts([font]);
     }
+  }
+
+  function sortedUniqueFonts(fonts) {
+    return [...new Set((Array.isArray(fonts) ? fonts : []).filter((font) => typeof font === "string" && font))].sort((a, b) => a.localeCompare(b));
   }
 
   function nextDefaultColor(index) {
@@ -885,6 +1107,8 @@
 
   if (typeof window !== "undefined" && window.__LOGO_BUILDER_TEST__) {
     window.__logoBuilderInternals = {
+      filterFontOptions,
+      loadFontAsync,
       renderBlocksToLines,
       trimBlankLines,
       rightTrim,
