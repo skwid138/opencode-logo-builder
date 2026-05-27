@@ -1,5 +1,7 @@
 # OpenCode Logo Builder
 
+[![CI](https://github.com/skwid138/opencode-logo-builder/actions/workflows/test.yml/badge.svg)](https://github.com/skwid138/opencode-logo-builder/actions/workflows/test.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A static, no-build web app for designing colored FIGlet ASCII logos for the [`@skwid138/opencode-tui`](https://github.com/skwid138/opencode-tui) OpenCode plugin.
 
 The builder lets you edit rows, choose a FIGlet font per row, split row text into colored inline blocks, preview the final terminal output, and export the plugin-compatible `logo` object:
@@ -15,6 +17,14 @@ The builder lets you edit rows, choose a FIGlet font per row, split row text int
   ]
 }
 ```
+
+## Features
+
+- **FIGlet font picker** with searchable category tags
+- **Per-segment color** — assign hex colors to individual text blocks
+- **Live terminal preview** — see your logo as it will appear in OpenCode
+- **Export plugin-compatible config** — copy the `logo` JSON object directly into your opencode config
+- **No build step** — open `index.html` and start designing
 
 Font names, editor metadata, and preview background settings are not exported.
 
