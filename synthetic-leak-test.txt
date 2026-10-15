@@ -1,0 +1,2 @@
+# Throwaway gitleaks CI test - synthetic key, never valid. Do not merge.
+aws_access_key_id = AKIAB2OXUXUMXFUY3I57
